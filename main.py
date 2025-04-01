@@ -31,7 +31,8 @@ class UpdateQuestion(BaseModel):
     question: str
     answer: str
 
-STOP_WORDS = {"what", "the", "is", "how", "a", "an", "to", "for", "of", "and", "in", "on", "at", "with", "by", "from"}
+STOP_WORDS = {"the", "is", "how", "a", "an", "to", "for", "of", "and", "in", "on", "at", "with", "by", "from",
+    "what", "where", "when", "why", "who", "are", "do", "does"}
 
 # Chatbot API endpoint for answering questions
 @app.post("/chat")
