@@ -31,23 +31,44 @@ class UpdateQuestion(BaseModel):
     question: str
     answer: str
 
+STOP_WORDS = {"what", "the", "is", "how", "a", "an", "to", "for", "of", "and", "in", "on", "at", "with", "by", "from"}
+
 # Chatbot API endpoint for answering questions
 @app.post("/chat")
 async def chat_response(request: QuestionRequest):
     try:
         conn = get_db()
         cur = conn.cursor()
+        
+        # Step 1: Check for exact match
         cur.execute("SELECT answer FROM recommended_questions WHERE question_text = %s", (request.question,))
         result = cur.fetchone()
-        cur.close()
-        conn.close()
-
+        
         if result:
+            # Exact match found, return the answer
             answer = result["answer"]
+            cur.close()
+            conn.close()
+            return {"answer": answer}
         else:
-            answer = "Sorry, I don't have an answer for that."
-
-        return {"answer": answer}
+            # No exact match, filter stop words and search by keywords
+            keywords = [kw for kw in request.question.lower().split() if kw not in STOP_WORDS]
+            if not keywords:
+                cur.close()
+                conn.close()
+                return {"suggestions": []}
+            
+            # Build a query to match all keywords in question_text
+            query = "SELECT id, question_text FROM recommended_questions WHERE " + " OR ".join(["question_text ILIKE %s" for _ in keywords])
+            params = ['%' + kw + '%' for kw in keywords]
+            cur.execute(query, params)
+            suggestions = cur.fetchall()
+            
+            cur.close()
+            conn.close()
+            
+            # Return suggestions as a list of objects with id and text
+            return {"suggestions": [{"id": s["id"], "text": s["question_text"]} for s in suggestions]}
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
