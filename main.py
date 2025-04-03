@@ -1,213 +1,197 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import database
-from database import get_db, get_categories, get_recommended_questions, get_category_id
+from database import get_db, get_departments, get_websites_by_department, get_random_questions_by_website
 from fastapi.middleware.cors import CORSMiddleware
-import os
 import uvicorn
+import os
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 app = FastAPI()
 
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  
-    allow_headers=["*"],  
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Pydantic models for requests
+# Pydantic models
 class QuestionRequest(BaseModel):
     question: str
 
 class NewQuestion(BaseModel):
-    category: str
-    question: str
-    answer: str
+    website_id: int
+    question_vi: str
+    answer_vi: str
+    question_en: str
+    answer_en: str
 
 class UpdateQuestion(BaseModel):
-    category: str
-    question: str
-    answer: str
+    website_id: int
+    question_vi: str
+    answer_vi: str
+    question_en: str
+    answer_en: str
 
-STOP_WORDS = {"the", "is", "how", "a", "an", "to", "for", "of", "and", "in", "on", "at", "with", "by", "from",
-    "what", "where", "when", "why", "who", "are", "do", "does"}
+# Load SBERT model and precompute embeddings
+model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')  # Mô hình đa ngôn ngữ
 
-# Chatbot API endpoint for answering questions
+# Hàm lấy tất cả câu hỏi từ database
+def get_all_questions():
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, question_vi, question_en, answer_vi, answer_en FROM qa_pairs WHERE hidden = 0")
+    questions = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return questions
+
+# Tính trước embeddings khi khởi động ứng dụng
+questions = get_all_questions()
+question_texts = [q['question_vi'] + ' ' + q['question_en'] for q in questions]  # Kết hợp cả hai ngôn ngữ
+question_embeddings = model.encode(question_texts)
+
+# Các endpoint hiện có
+@app.get("/departments")
+async def fetch_departments():
+    departments = get_departments()
+    if not departments:
+        raise HTTPException(status_code=404, detail="No departments found")
+    return departments
+
+@app.get("/websites/{department_id}")
+async def fetch_websites(department_id: int):
+    websites = get_websites_by_department(department_id)
+    if not websites:
+        raise HTTPException(status_code=404, detail="No websites found for this department")
+    return websites
+
+@app.get("/questions/{website_id}")
+async def fetch_questions(website_id: int):
+    questions = get_random_questions_by_website(website_id)
+    if not questions:
+        raise HTTPException(status_code=404, detail="No questions found for this website")
+    return questions
+
+# Endpoint chat cập nhật với SBERT
 @app.post("/chat")
 async def chat_response(request: QuestionRequest):
     try:
-        conn = get_db()
-        cur = conn.cursor()
+        user_question = request.question
+        user_embedding = model.encode([user_question])  # Calculate embedding for the user's question
+        similarities = cosine_similarity(user_embedding, question_embeddings)[0]  # Compute similarity scores
+        max_similarity_index = np.argmax(similarities)  # Index of the most similar question
+        max_similarity = similarities[max_similarity_index]  # Highest similarity score
         
-        # Step 1: Check for exact match
-        cur.execute("SELECT answer FROM recommended_questions WHERE question_text = %s", (request.question,))
-        result = cur.fetchone()
-        
-        if result:
-            # Exact match found, return the answer
-            answer = result["answer"]
-            cur.close()
-            conn.close()
+        if max_similarity > 0.7:  # Similarity threshold (adjustable)
+            answer = questions[max_similarity_index]['answer_vi']  # Return Vietnamese answer (or adjust for language)
             return {"answer": answer}
         else:
-            # No exact match, filter stop words and search by keywords
-            keywords = [kw for kw in request.question.lower().split() if kw not in STOP_WORDS]
-            if not keywords:
-                cur.close()
-                conn.close()
-                return {"suggestions": []}
-            
-            # Build a query to match all keywords in question_text
-            query = "SELECT id, question_text FROM recommended_questions WHERE " + " OR ".join(["question_text ILIKE %s" for _ in keywords])
-            params = ['%' + kw + '%' for kw in keywords]
-            cur.execute(query, params)
-            suggestions = cur.fetchall()
-            
-            cur.close()
-            conn.close()
-            
-            # Return suggestions as a list of objects with id and text
-            return {"suggestions": [{"id": s["id"], "text": s["question_text"]} for s in suggestions]}
+            top_indices = np.argsort(similarities)[-3:][::-1]  # Get indices of top 3 similarities
+            suggestions = [questions[i]['question_vi'] for i in top_indices if similarities[i] > 0.3]  # Extract top 3 questions
+            if suggestions:
+                return {"suggestions": suggestions}
+            else:
+                return {"answer": "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"}
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-# API to get all categories
-@app.get("/all-categories")
-async def fetch_categories():
-    try:
-        categories = get_categories()
-        if not categories:
-            raise HTTPException(status_code=404, detail="No categories found")
-        return categories
-    except Exception as e:
-        print("Error:", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-# API to get recommended questions based on category
-@app.get("/recommended-questions")
-async def fetch_recommended_questions(category_id: int):
-    questions = get_recommended_questions(category_id)
-    if not questions:
-        raise HTTPException(status_code=500, detail="Error fetching recommended questions")
-    return questions
-
-# API to get all questions
-@app.get("/all-questions")
-async def fetch_all_questions():
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT q.id, c.category_name AS category, q.question_text, q.answer, q.hidden
-            FROM recommended_questions q
-            JOIN categories c ON q.category_id = c.id
-        """)
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        results = [
-            {"id": row["id"], "category": row["category"], "question": row["question_text"], "answer": row["answer"], "hidden": row["hidden"]}
-            for row in rows
-        ]
-        return results
-    except Exception as e:
-        print("Error:", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ✅ **Fixed: API to add a new question**
+# Các endpoint khác giữ nguyên
 @app.post("/add-question")
 async def add_question(new_question: NewQuestion):
     try:
         conn = get_db()
-        cur = conn.cursor()
-
-        # ✅ **Use `get_category_id` to ensure the category exists**
-        category_id = get_category_id(new_question.category)
-        if category_id is None:
-            raise HTTPException(status_code=400, detail="Category does not exist")
-
-        # ✅ **Insert new question into the database**
-        cur.execute(
-            "INSERT INTO recommended_questions (category_id, question_text, answer) VALUES (%s, %s, %s) RETURNING id",
-            (category_id, new_question.question, new_question.answer),
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO qa_pairs (website_id, question_vi, answer_vi, question_en, answer_en) VALUES (%s, %s, %s, %s, %s)",
+            (new_question.website_id, new_question.question_vi, new_question.answer_vi, new_question.question_en, new_question.answer_en)
         )
-        question_id = cur.fetchone()["id"]
-
         conn.commit()
-        cur.close()
+        question_id = cursor.lastrowid
+        cursor.close()
         conn.close()
-
+        
+        # Cập nhật lại embeddings sau khi thêm câu hỏi mới
+        global questions, question_embeddings
+        questions = get_all_questions()
+        question_texts = [q['question_vi'] + ' ' + q['question_en'] for q in questions]
+        question_embeddings = model.encode(question_texts)
+        
         return {"id": question_id, "message": "Question added successfully"}
-
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-# API to update a question
 @app.put("/update-question/{id}")
 async def update_question(id: int, updated_question: UpdateQuestion):
     try:
         conn = get_db()
-        cur = conn.cursor()
-
-        print(f"Received update request: {updated_question}")
-
-        # Ensure category exists
-        category_id = get_category_id(updated_question.category)
-        if category_id is None:
-            raise HTTPException(status_code=400, detail="Category does not exist")
-
-        # Update question
-        cur.execute(
-            "UPDATE recommended_questions SET category_id = %s, question_text = %s, answer = %s WHERE id = %s",
-            (category_id, updated_question.question, updated_question.answer, id),
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE qa_pairs SET website_id = %s, question_vi = %s, answer_vi = %s, question_en = %s, answer_en = %s WHERE id = %s",
+            (updated_question.website_id, updated_question.question_vi, updated_question.answer_vi, updated_question.question_en, updated_question.answer_en, id)
         )
         conn.commit()
-
-        cur.close()
+        cursor.close()
         conn.close()
-
+        
+        # Cập nhật lại embeddings sau khi chỉnh sửa
+        global questions, question_embeddings
+        questions = get_all_questions()
+        question_texts = [q['question_vi'] + ' ' + q['question_en'] for q in questions]
+        question_embeddings = model.encode(question_texts)
+        
         return {"message": "Question updated successfully"}
-
-    except Exception as e:
-        print("Error updating question:", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-# API to hide a question
-@app.patch("/hide-question/{question_id}")
-async def hide_question(question_id: int):
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-
-        # Toggle the hidden column
-        cur.execute("""
-            UPDATE recommended_questions 
-            SET hidden = NOT hidden
-            WHERE id = %s
-        """, (question_id,))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-        return {"message": "Question visibility toggled"}
-
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/")
-def home():
-    return {"message": "Chatbot API is running!"}
+@app.patch("/hide-question/{question_id}")
+async def hide_question(question_id: int):
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE qa_pairs SET hidden = NOT hidden WHERE id = %s", (question_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Cập nhật lại embeddings sau khi ẩn/hiện
+        global questions, question_embeddings
+        questions = get_all_questions()
+        question_texts = [q['question_vi'] + ' ' + q['question_en'] for q in questions]
+        question_embeddings = model.encode(question_texts)
+        
+        return {"message": "Question visibility toggled"}
+    except Exception as e:
+        print("Error:", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Get PORT from environment variables (default to 9090)
-PORT = int(os.getenv("PORT", 9090))
+@app.get("/all-qa-pairs")
+async def fetch_all_qa_pairs():
+    try:
+        conn = get_db()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT q.id, d.name_vi as department, w.name_vi as website, q.question_vi, q.answer_vi, q.question_en, q.answer_en, q.hidden
+            FROM qa_pairs q
+            JOIN websites w ON q.website_id = w.id
+            JOIN departments d ON w.department_id = d.id
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        print("Error:", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="localhost", port=PORT)
+    PORT = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="127.0.0.1", port=PORT)
