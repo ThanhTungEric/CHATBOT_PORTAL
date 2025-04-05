@@ -179,7 +179,7 @@ async def fetch_all_qa_pairs():
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-            SELECT q.id, d.name_vi as department, w.name_vi as website, q.question_vi, q.answer_vi, q.question_en, q.answer_en, q.hidden
+            SELECT q.id, d.id as department_id, d.name_vi as department, w.id as website_id, w.name_vi as website, q.question_vi, q.answer_vi, q.question_en, q.answer_en, q.hidden
             FROM qa_pairs q
             JOIN websites w ON q.website_id = w.id
             JOIN departments d ON w.department_id = d.id
