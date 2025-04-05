@@ -1,3 +1,9 @@
 fastapi
 uvicorn
 rapidfuzz
+numpy
+sentence_transformers
+cosine_similarity
+pydantic
+dotenv
+load_dotenv

@@ -93,7 +93,7 @@ async def chat_response(request: QuestionRequest):
             return {"answer": answer}
         else:
             top_indices = np.argsort(similarities)[-3:][::-1]  # Get indices of top 3 similarities
-            suggestions = [questions[i]['question_vi'] for i in top_indices if similarities[i] > 0.3]  # Extract top 3 questions
+            suggestions = [questions[i]['question_vi'] for i in top_indices if similarities[i] > 0.5]  # Extract top 3 questions
             if suggestions:
                 return {"suggestions": suggestions}
             else:

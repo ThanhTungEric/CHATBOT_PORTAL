@@ -21,6 +21,7 @@ def get_db():
             database=DB_NAME,
             #protocol="tcp"   
         )
+        print("Connected completed")
         return conn
     except mysql.connector.Error as e:
         print("Database connection error:", e)
@@ -32,8 +33,7 @@ def get_departments():
         conn = get_db()  # Assign conn first
         if not conn:  # Check if connection failed
             print("Failed to connect to the database.")
-            return []
-        print("Connected successfully!")  # Optional: confirm connection
+            return [] # Optional: confirm connection
         cursor = conn.cursor(dictionary=True)
         cursor.execute("SELECT id, name_vi, name_en FROM departments")
         departments = cursor.fetchall()
