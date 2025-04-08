@@ -121,7 +121,7 @@ async def add_question(new_question: NewQuestion):
                 similar_question = questions[max_index]
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Câu hỏi đã có sắn trong cơ sở dữ liệu: '{similar_question['question_vi']}'"
+                    #detail=f"Câu hỏi đã có sắn trong cơ sở dữ liệu: '{similar_question['question_vi']}'"
                 )
 
         # If not too similar, proceed to add the question
