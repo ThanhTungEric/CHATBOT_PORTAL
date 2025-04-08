@@ -105,7 +105,26 @@ async def chat_response(request: QuestionRequest):
 # Các endpoint khác giữ nguyên
 @app.post("/add-question")
 async def add_question(new_question: NewQuestion):
+    global questions, question_embeddings
     try:
+        
+        # Combine question_vi and question_en for embedding
+        new_question_text = new_question.question_vi + " " + new_question.question_en
+        new_embedding = model.encode([new_question_text])[0]
+
+        # Calculate similarity with existing questions
+        if question_embeddings.size > 0:
+            similarities = cosine_similarity([new_embedding], question_embeddings)[0]
+            max_similarity = np.max(similarities)
+            if max_similarity >= 0.9:
+                max_index = np.argmax(similarities)
+                similar_question = questions[max_index]
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Câu hỏi đã có sắn trong cơ sở dữ liệu: '{similar_question['question_vi']}'"
+                )
+
+        # If not too similar, proceed to add the question
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute(
@@ -116,14 +135,15 @@ async def add_question(new_question: NewQuestion):
         question_id = cursor.lastrowid
         cursor.close()
         conn.close()
-        
-        # Cập nhật lại embeddings sau khi thêm câu hỏi mới
-        global questions, question_embeddings
+
+        # Update the global questions and embeddings
         questions = get_all_questions()
         question_texts = [q['question_vi'] + ' ' + q['question_en'] for q in questions]
         question_embeddings = model.encode(question_texts)
-        
+
         return {"id": question_id, "message": "Question added successfully"}
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
