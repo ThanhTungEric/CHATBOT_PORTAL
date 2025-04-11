@@ -1,83 +1,57 @@
-import psycopg2
-from psycopg2.extras import RealDictCursor
 import os
 from dotenv import load_dotenv
+import mysql.connector
 
-# Load environment variables
+# Load biến môi trường từ .env
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DB_HOST = os.getenv("DB_HOST")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_NAME = os.getenv("DB_NAME")
 
-# Function to establish database connection
+# Kết nối DB
 def get_db():
     try:
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        conn = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME
+        )
+        print("Connected completed")
         return conn
-    except Exception as e:
+    except mysql.connector.Error as e:
         print("Database connection error:", e)
         return None
 
-# Function to fetch FAQ categories
-def get_categories():
+# Tạo bảng nếu chưa có
+def create_qa_table_if_not_exists():
     try:
         conn = get_db()
         if not conn:
-            return []
+            print("Failed to connect to the database.")
+            return
 
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, category_name FROM categories")
-            categories = cur.fetchall()
-
-        return [{"id": row["id"], "category": row["category_name"]} for row in categories]
-
-    except Exception as e:
-        print("Error fetching categories:", e)
-        return []
-    
-    finally:
-        if conn:
-            conn.close()
-
-# Function to fetch recommended questions by category
-def get_recommended_questions(category_id):
-    try:
-        conn = get_db()
-        if not conn:
-            return []
-
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, question_text FROM recommended_questions WHERE category_id = %s", (category_id,))
-            questions = cur.fetchall()
-
-        return [{"id": q["id"], "text": q["question_text"]} for q in questions]
-
-    except Exception as e:
-        print("Error fetching recommended questions:", e)
-        return []
-
-    finally:
-        if conn:
-            conn.close()
-
-# Function to get category ID by category name
-def get_category_id(category_name):
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM categories WHERE category_name = %s", (category_name,))
-        category = cur.fetchone()
-
-        if not category:
-            cur.execute("INSERT INTO categories (category_name) VALUES (%s) RETURNING id", (category_name,))
-            category = cur.fetchone()
-            conn.commit()
-
-        cur.close()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS qa_pairs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                website_id INT NOT NULL,
+                question_vi TEXT NOT NULL,
+                answer_vi TEXT NOT NULL,
+                question_en TEXT NOT NULL,
+                answer_en TEXT NOT NULL,
+                role VARCHAR(50) DEFAULT 'user',
+                hidden BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
+        
+        conn.commit()
+        cursor.close()
         conn.close()
-
-        return category["id"]
+        print("qa_pairs table checked/created successfully.")
     except Exception as e:
-        print("Error fetching category ID:", e)
-        return None
-
-
+        print("Error creating qa_pairs table:", e)

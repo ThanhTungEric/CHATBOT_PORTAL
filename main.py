@@ -1,191 +1,227 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import database
-from database import get_db, get_categories, get_recommended_questions, get_category_id
+from database import get_db, create_qa_table_if_not_exists
+
 from fastapi.middleware.cors import CORSMiddleware
-import os
 import uvicorn
+import os
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+from langdetect import detect  # pip install langdetect
 
 app = FastAPI()
+
+# Tạo bảng nếu chưa tồn tại
+create_qa_table_if_not_exists()
 
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  
-    allow_headers=["*"],  
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Pydantic models for requests
+# Pydantic models
 class QuestionRequest(BaseModel):
     question: str
 
 class NewQuestion(BaseModel):
-    category: str
-    question: str
-    answer: str
+    website_id: int
+    question_vi: str
+    answer_vi: str
+    question_en: str
+    answer_en: str
 
 class UpdateQuestion(BaseModel):
-    category: str
-    question: str
-    answer: str
+    website_id: int
+    question_vi: str
+    answer_vi: str
+    question_en: str
+    answer_en: str
 
-# Chatbot API endpoint for answering questions
+# Load SBERT model
+model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+
+# Global variables for questions and embeddings
+questions = []
+question_embeddings_vi = []
+question_embeddings_en = []
+
+# Load questions and compute embeddings
+def load_embeddings():
+    global questions, question_embeddings_vi, question_embeddings_en
+    questions = get_all_questions()
+    if questions:
+        question_texts_vi = [q['question_vi'] for q in questions]
+        question_texts_en = [q['question_en'] for q in questions]
+        question_embeddings_vi = model.encode(question_texts_vi)
+        question_embeddings_en = model.encode(question_texts_en)
+    else:
+        question_embeddings_vi = []
+        question_embeddings_en = []
+
+# Load once on startup
+@app.on_event("startup")
+async def startup_event():
+    load_embeddings()
+
+# Get all questions
+def get_all_questions():
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, question_vi, question_en, answer_vi, answer_en FROM qa_pairs WHERE hidden = 0")
+    questions = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return questions
+
+# Chat endpoint
 @app.post("/chat")
 async def chat_response(request: QuestionRequest):
     try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT answer FROM recommended_questions WHERE question_text = %s", (request.question,))
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
+        user_question = request.question
+        lang = detect(user_question)
 
-        if result:
-            answer = result["answer"]
+        if not questions:
+            return {"answer": "Hiện chưa có dữ liệu câu hỏi."}
+
+        if lang == "en":
+            user_embedding = model.encode([user_question])
+            similarities = cosine_similarity(user_embedding, question_embeddings_en)[0]
+            top_texts = [q['question_en'] for q in questions]
+            top_answers = [q['answer_en'] for q in questions]
         else:
-            answer = "Sorry, I don't have an answer for that."
+            user_embedding = model.encode([user_question])
+            similarities = cosine_similarity(user_embedding, question_embeddings_vi)[0]
+            top_texts = [q['question_vi'] for q in questions]
+            top_answers = [q['answer_vi'] for q in questions]
 
-        return {"answer": answer}
+        max_similarity_index = np.argmax(similarities)
+        max_similarity = similarities[max_similarity_index]
+
+        if max_similarity > 0.7:
+            return {"answer": top_answers[max_similarity_index]}
+        else:
+            top_indices = np.argsort(similarities)[-3:][::-1]
+            suggestions = [top_texts[i] for i in top_indices if similarities[i] >= 0.5]
+            if suggestions:
+                return {"suggestions": suggestions}
+            return {"answer": "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"}
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-# API to get all categories
-@app.get("/all-categories")
-async def fetch_categories():
-    try:
-        categories = get_categories()
-        if not categories:
-            raise HTTPException(status_code=404, detail="No categories found")
-        return categories
-    except Exception as e:
-        print("Error:", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-# API to get recommended questions based on category
-@app.get("/recommended-questions")
-async def fetch_recommended_questions(category_id: int):
-    questions = get_recommended_questions(category_id)
-    if not questions:
-        raise HTTPException(status_code=500, detail="Error fetching recommended questions")
-    return questions
-
-# API to get all questions
-@app.get("/all-questions")
-async def fetch_all_questions():
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT q.id, c.category_name AS category, q.question_text, q.answer, q.hidden
-            FROM recommended_questions q
-            JOIN categories c ON q.category_id = c.id
-        """)
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        results = [
-            {"id": row["id"], "category": row["category"], "question": row["question_text"], "answer": row["answer"], "hidden": row["hidden"]}
-            for row in rows
-        ]
-        return results
-    except Exception as e:
-        print("Error:", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ✅ **Fixed: API to add a new question**
 @app.post("/add-question")
 async def add_question(new_question: NewQuestion):
     try:
+        new_embedding_vi = model.encode([new_question.question_vi])[0]
+        new_embedding_en = model.encode([new_question.question_en])[0]
+
+        # Kiểm tra nếu embeddings hiện tại không rỗng
+        if question_embeddings_vi.size > 0:
+            sim_vi = cosine_similarity([new_embedding_vi], question_embeddings_vi)[0]
+        else:
+            sim_vi = np.array([0.0])
+
+        if question_embeddings_en.size > 0:
+            sim_en = cosine_similarity([new_embedding_en], question_embeddings_en)[0]
+        else:
+            sim_en = np.array([0.0])
+
+        max_sim_vi = np.max(sim_vi).item()
+        max_sim_en = np.max(sim_en).item()
+
+        if max_sim_vi >= 0.9 or max_sim_en >= 0.9:
+            vi_index = np.argmax(sim_vi)
+            en_index = np.argmax(sim_en)
+            most_similar_vi = questions[vi_index]['question_vi']
+            most_similar_en = questions[en_index]['question_en']
+            raise HTTPException(
+                status_code=400,
+                detail=f"Câu hỏi đã tồn tại:\n- VI: {most_similar_vi}\n- EN: {most_similar_en}"
+            )
+
         conn = get_db()
-        cur = conn.cursor()
-
-        # ✅ **Use `get_category_id` to ensure the category exists**
-        category_id = get_category_id(new_question.category)
-        if category_id is None:
-            raise HTTPException(status_code=400, detail="Category does not exist")
-
-        # ✅ **Insert new question into the database**
-        cur.execute(
-            "INSERT INTO recommended_questions (category_id, question_text, answer) VALUES (%s, %s, %s) RETURNING id",
-            (category_id, new_question.question, new_question.answer),
-        )
-        question_id = cur.fetchone()["id"]
-
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO qa_pairs (website_id, question_vi, answer_vi, question_en, answer_en, hidden)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            new_question.website_id,
+            new_question.question_vi,
+            new_question.answer_vi,
+            new_question.question_en,
+            new_question.answer_en,
+            0  # hidden mặc định là 0
+        ))
         conn.commit()
-        cur.close()
+        question_id = cursor.lastrowid
+        cursor.close()
         conn.close()
 
+        load_embeddings()
         return {"id": question_id, "message": "Question added successfully"}
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-# API to update a question
+
+
 @app.put("/update-question/{id}")
 async def update_question(id: int, updated_question: UpdateQuestion):
     try:
         conn = get_db()
-        cur = conn.cursor()
-
-        print(f"Received update request: {updated_question}")
-
-        # Ensure category exists
-        category_id = get_category_id(updated_question.category)
-        if category_id is None:
-            raise HTTPException(status_code=400, detail="Category does not exist")
-
-        # Update question
-        cur.execute(
-            "UPDATE recommended_questions SET category_id = %s, question_text = %s, answer = %s WHERE id = %s",
-            (category_id, updated_question.question, updated_question.answer, id),
-        )
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE qa_pairs SET website_id = %s, question_vi = %s, answer_vi = %s, question_en = %s, answer_en = %s WHERE id = %s
+        """, (updated_question.website_id, updated_question.question_vi, updated_question.answer_vi, updated_question.question_en, updated_question.answer_en, id))
         conn.commit()
-
-        cur.close()
+        cursor.close()
         conn.close()
 
+        load_embeddings()
         return {"message": "Question updated successfully"}
-
-    except Exception as e:
-        print("Error updating question:", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-# API to hide a question
-@app.patch("/hide-question/{question_id}")
-async def hide_question(question_id: int):
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-
-        # Toggle the hidden column
-        cur.execute("""
-            UPDATE recommended_questions 
-            SET hidden = NOT hidden
-            WHERE id = %s
-        """, (question_id,))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-        return {"message": "Question visibility toggled"}
-
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/")
-def home():
-    return {"message": "Chatbot API is running!"}
+@app.patch("/hide-question/{question_id}")
+async def hide_question(question_id: int):
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE qa_pairs SET hidden = NOT hidden WHERE id = %s", (question_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-# Get PORT from environment variables (default to 9090)
-PORT = int(os.getenv("PORT", 9090))
+        load_embeddings()
+        return {"message": "Question visibility toggled"}
+    except Exception as e:
+        print("Error:", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/all-qa-pairs")
+async def fetch_all_qa_pairs():
+    try:
+        conn = get_db()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id, website_id, question_vi, answer_vi, question_en, answer_en, hidden FROM qa_pairs")
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        print("Error:", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="localhost", port=PORT)
+    PORT = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="127.0.0.1", port=PORT)
