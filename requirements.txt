@@ -6,3 +6,4 @@ scikit-learn            # For cosine_similarity
 numpy                   # For array/vector math
 python-dotenv           # For reading .env files
 mysql-connector-python  # For connecting to MySQL database
+langdetect              # For detecting multiple languages
