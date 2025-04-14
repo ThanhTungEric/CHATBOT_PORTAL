@@ -109,17 +109,22 @@ async def chat_response(request: QuestionRequest):
             top_indices = np.argsort(similarities)[-3:][::-1]
             suggestions = [top_texts[i] for i in top_indices if similarities[i] >= 0.5]
             if suggestions:
-                if lang == "en":
-                    return {
-                        "answer": "I'm not sure, but maybe you are asking about one of these questions:",
-                        "suggestions": suggestions
-                    }
-                else:
-                    return {
-                        "answer": "Tôi không chắc chắn, nhưng có thể bạn đang hỏi về một trong những câu hỏi này:",
-                        "suggestions": suggestions
-                    }
-            return {"answer": "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"}
+                return {
+                    "answer": (
+                        "I'm not sure, but maybe you are asking about one of these questions:"
+                        if lang == "en"
+                        else "Tôi không chắc chắn, nhưng có thể bạn đang hỏi về một trong những câu hỏi này:"
+                    ),
+                    "suggestions": suggestions
+                }
+
+            return {
+                "answer": (
+                    "Sorry, I don't have a suitable answer. Could you please ask more specifically?"
+                    if lang == "en"
+                    else "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
+                )
+            }
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
