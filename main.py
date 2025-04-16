@@ -5,10 +5,19 @@ from database import get_db, get_departments, get_websites_by_department, get_ra
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from langdetect import detect  # cài: pip install langdetect
+#from langdetect import detect  # cài: pip install langdetect
+import time
+import pycld2 as cld2
+
+from googletrans import Translator
+translator = Translator()
+result1 = translator.detect("hello")
+result2 = translator.detect("Chào bạn")
+print(result1.lang)  # Kết quả: 'en' (tiếng Anh)
+print(result2.lang)
 
 app = FastAPI()
 
@@ -41,6 +50,8 @@ class UpdateQuestion(BaseModel):
 
 # Load SBERT model and precompute embeddings
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')  # Mô hình đa ngôn ngữ
+#model = SentenceTransformer('xlm-r-100langs-bert-base-nli-stsb-mean-tokens')
+#model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
 
 # Hàm lấy tất cả câu hỏi từ database
 def get_all_questions():
@@ -58,6 +69,11 @@ question_texts_vi = [q['question_vi'] for q in questions]
 question_texts_en = [q['question_en'] for q in questions]
 question_embeddings_vi = model.encode(question_texts_vi)
 question_embeddings_en = model.encode(question_texts_en)
+start = time.time()
+encode_time = time.time() - start
+print(f"Thời gian encode: {encode_time} giây")
+
+
 
 # Các endpoint hiện có
 @app.get("/departments")
@@ -86,27 +102,44 @@ async def fetch_questions(website_id: int):
 async def chat_response(request: QuestionRequest):
     try:
         user_question = request.question
-        lang = detect(user_question)
+        print(f"Câu hỏi nhận được: {user_question}")
+        lang = translator.detect(user_question).lang
+        print(f"Ngôn ngữ phát hiện: {lang}")
+        #print(f"Lang type: {type(lang)}, value: {lang}")
+
+        start = time.time()
 
         # Chọn embeddings phù hợp
         if lang == "en":
             user_embedding = model.encode([user_question])
+            encode_time = time.time() - start
             similarities = cosine_similarity(user_embedding, question_embeddings_en)[0]
+            similarity_time = time.time() - start
             top_texts = [q['question_en'] for q in questions]
             top_answers = [q['answer_en'] for q in questions]
+            print("English similarities:", similarities)
+            print(f"Thời gian encode: {encode_time} giây")
+            print(f"Thời gian tính cosine similarity: {similarity_time} giây")
         else:
             user_embedding = model.encode([user_question])
+            encode_time = time.time() - start
             similarities = cosine_similarity(user_embedding, question_embeddings_vi)[0]
+            similarity_time = time.time() - start
             top_texts = [q['question_vi'] for q in questions]
             top_answers = [q['answer_vi'] for q in questions]
+            print("Vietnamese similarities:", similarities)
+            print(f"Thời gian encode: {encode_time} giây")
+            print(f"Thời gian tính cosine similarity: {similarity_time} giây")
 
         # Tìm câu hỏi gần nhất
         max_similarity_index = np.argmax(similarities)
         max_similarity = similarities[max_similarity_index]
+        print(top_answers[max_similarity_index])
 
         # Nếu độ giống cao thì trả lời luôn
         if max_similarity > 0.7:
             return {"answer": top_answers[max_similarity_index]}
+            
         else:
             # Nếu độ giống trung bình thì đưa ra gợi ý
             top_indices = np.argsort(similarities)[-3:][::-1]
@@ -115,11 +148,14 @@ async def chat_response(request: QuestionRequest):
             if suggestions:
                 return {"suggestions": suggestions}
             else:
-                return {
-                    "answer": "Sorry, I do not have an appropriate answer. Could you ask more clearly?"
-                    if lang == "en" else
-                    "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
-                }
+                if lang == "en":
+                    return {
+                        "answer": "Sorry, I do not have an appropriate answer. Could you ask more clearly?"
+                    }
+                else:
+                    return {
+                        "answer": "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
+                    }
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -130,7 +166,7 @@ async def chat_response(request: QuestionRequest):
 async def add_question(new_question: NewQuestion):
     global questions, question_embeddings_vi, question_embeddings_en
     try:
-        # Encode riêng cho từng ngôn ngữ
+        # Encode riêng cho 2 ngôn ngữ
         new_embedding_vi = model.encode([new_question.question_vi])[0]
         new_embedding_en = model.encode([new_question.question_en])[0]
 
@@ -145,11 +181,11 @@ async def add_question(new_question: NewQuestion):
         if max_sim_vi >= 0.9 or max_sim_en >= 0.9:
             vi_index = np.argmax(sim_vi)
             en_index = np.argmax(sim_en)
-            most_similar_vi = questions[vi_index]['question_vi']
-            most_similar_en = questions[en_index]['question_en']
+            #most_similar_vi = questions[vi_index]['question_vi']
+            #most_similar_en = questions[en_index]['question_en']
             raise HTTPException(
                 status_code=400,
-                detail=f"Câu hỏi đã tồn tại với nội dung tương tự:\n- VI: {most_similar_vi}\n- EN: {most_similar_en}"
+                #detail=f"Câu hỏi đã tồn tại với nội dung tương tự:\n- VI: {most_similar_vi}\n- EN: {most_similar_en}"
             )
 
         # Chưa trùng thì thêm vào DB
