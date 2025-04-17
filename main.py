@@ -121,14 +121,14 @@ async def chat_response(request: QuestionRequest):
                     ),
                     "suggestions": suggestions
                 }
-
-            return {
-                "answer": (
-                    "AWGMQEfVmpJ8LGt2uhwpsE9M5p1Df7yyDcUYqQpdUiSZLGKZjZuCuKguEUSFGZ59" # thay dòng này bằng token.
-                    if lang == "en"
-                    else "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
-                )
-            }
+            if lang == "en" or lang == "vi":
+                return {
+                    "answer": (
+                        "AWGMQEfVmpJ8LGt2uhwpsE9M5p1Df7yyDcUYqQpdUiSZLGKZjZuCuKguEUSFGZ59" # thay dòng này bằng token.
+                    
+                    #else "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
+                    )
+                }
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
