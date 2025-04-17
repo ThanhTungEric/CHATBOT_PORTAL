@@ -1,25 +1,20 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import database
-from database import get_db, get_departments, get_websites_by_department, get_random_questions_by_website
+from database import get_db, create_qa_table_if_not_exists
+
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-#from langdetect import detect  # cài: pip install langdetect
-import time
-import pycld2 as cld2
-
-from googletrans import Translator
-translator = Translator()
-result1 = translator.detect("hello")
-result2 = translator.detect("Chào bạn")
-print(result1.lang)  # Kết quả: 'en' (tiếng Anh)
-print(result2.lang)
+from langdetect import detect  # pip install langdetect
 
 app = FastAPI()
+
+# Tạo bảng nếu chưa tồn tại
+create_qa_table_if_not_exists()
 
 # Enable CORS
 app.add_middleware(
@@ -48,12 +43,33 @@ class UpdateQuestion(BaseModel):
     question_en: str
     answer_en: str
 
-# Load SBERT model and precompute embeddings
-model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')  # Mô hình đa ngôn ngữ
-#model = SentenceTransformer('xlm-r-100langs-bert-base-nli-stsb-mean-tokens')
-#model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
+# Load SBERT model
+model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
-# Hàm lấy tất cả câu hỏi từ database
+# Global variables for questions and embeddings
+questions = []
+question_embeddings_vi = []
+question_embeddings_en = []
+
+# Load questions and compute embeddings
+def load_embeddings():
+    global questions, question_embeddings_vi, question_embeddings_en
+    questions = get_all_questions()
+    if questions:
+        question_texts_vi = [q['question_vi'] for q in questions]
+        question_texts_en = [q['question_en'] for q in questions]
+        question_embeddings_vi = model.encode(question_texts_vi)
+        question_embeddings_en = model.encode(question_texts_en)
+    else:
+        question_embeddings_vi = []
+        question_embeddings_en = []
+
+# Load once on startup
+@app.on_event("startup")
+async def startup_event():
+    load_embeddings()
+
+# Get all questions
 def get_all_questions():
     conn = get_db()
     cursor = conn.cursor(dictionary=True)
@@ -63,53 +79,16 @@ def get_all_questions():
     conn.close()
     return questions
 
-# Tính trước embeddings khi khởi động ứng dụng
-questions = get_all_questions()
-question_texts_vi = [q['question_vi'] for q in questions]
-question_texts_en = [q['question_en'] for q in questions]
-question_embeddings_vi = model.encode(question_texts_vi)
-question_embeddings_en = model.encode(question_texts_en)
-start = time.time()
-encode_time = time.time() - start
-print(f"Thời gian encode: {encode_time} giây")
-
-
-
-# Các endpoint hiện có
-@app.get("/departments")
-async def fetch_departments():
-    departments = get_departments()
-    if not departments:
-        raise HTTPException(status_code=404, detail="No departments found")
-    return departments
-
-@app.get("/websites/{department_id}")
-async def fetch_websites(department_id: int):
-    websites = get_websites_by_department(department_id)
-    if not websites:
-        raise HTTPException(status_code=404, detail="No websites found for this department")
-    return websites
-
-@app.get("/questions/{website_id}")
-async def fetch_questions(website_id: int):
-    questions = get_random_questions_by_website(website_id)
-    if not questions:
-        raise HTTPException(status_code=404, detail="No questions found for this website")
-    return questions
-
-# Endpoint chat cập nhật với SBERT
+# Chat endpoint
 @app.post("/chat")
 async def chat_response(request: QuestionRequest):
     try:
         user_question = request.question
-        print(f"Câu hỏi nhận được: {user_question}")
-        lang = translator.detect(user_question).lang
-        print(f"Ngôn ngữ phát hiện: {lang}")
-        #print(f"Lang type: {type(lang)}, value: {lang}")
+        lang = detect(user_question)
 
-        start = time.time()
+        if not questions:
+            return {"answer": "Hiện chưa có dữ liệu câu hỏi."}
 
-        # Chọn embeddings phù hợp
         if lang == "en":
             user_embedding = model.encode([user_question])
             encode_time = time.time() - start
@@ -131,53 +110,57 @@ async def chat_response(request: QuestionRequest):
             print(f"Thời gian encode: {encode_time} giây")
             print(f"Thời gian tính cosine similarity: {similarity_time} giây")
 
-        # Tìm câu hỏi gần nhất
         max_similarity_index = np.argmax(similarities)
         max_similarity = similarities[max_similarity_index]
         print(top_answers[max_similarity_index])
 
-        # Nếu độ giống cao thì trả lời luôn
         if max_similarity > 0.7:
             return {"answer": top_answers[max_similarity_index]}
             
         else:
-            # Nếu độ giống trung bình thì đưa ra gợi ý
             top_indices = np.argsort(similarities)[-3:][::-1]
             suggestions = [top_texts[i] for i in top_indices if similarities[i] >= 0.5]
-
             if suggestions:
-                return {"suggestions": suggestions}
-            else:
-                if lang == "en":
-                    return {
-                        "answer": "Sorry, I do not have an appropriate answer. Could you ask more clearly?"
-                    }
-                else:
-                    return {
-                        "answer": "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
-                    }
+                return {
+                    "answer": (
+                        "I'm not sure, but maybe you are asking about one of these questions:"
+                        if lang == "en"
+                        else "Tôi không chắc chắn, nhưng có thể bạn đang hỏi về một trong những câu hỏi này:"
+                    ),
+                    "suggestions": suggestions
+                }
+
+            return {
+                "answer": (
+                    "Sorry, I don't have a suitable answer. Could you please ask more specifically?"
+                    if lang == "en"
+                    else "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
+                )
+            }
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-
 @app.post("/add-question")
 async def add_question(new_question: NewQuestion):
-    global questions, question_embeddings_vi, question_embeddings_en
     try:
-        # Encode riêng cho 2 ngôn ngữ
         new_embedding_vi = model.encode([new_question.question_vi])[0]
         new_embedding_en = model.encode([new_question.question_en])[0]
 
-        # Tính độ giống riêng
-        sim_vi = cosine_similarity([new_embedding_vi], question_embeddings_vi)[0]
-        sim_en = cosine_similarity([new_embedding_en], question_embeddings_en)[0]
+        # Kiểm tra nếu embeddings hiện tại không rỗng
+        if question_embeddings_vi.size > 0:
+            sim_vi = cosine_similarity([new_embedding_vi], question_embeddings_vi)[0]
+        else:
+            sim_vi = np.array([0.0])
 
-        max_sim_vi = np.max(sim_vi)
-        max_sim_en = np.max(sim_en)
+        if question_embeddings_en.size > 0:
+            sim_en = cosine_similarity([new_embedding_en], question_embeddings_en)[0]
+        else:
+            sim_en = np.array([0.0])
 
-        # Kiểm tra trùng nếu 1 trong 2 cao > 0.9
+        max_sim_vi = np.max(sim_vi).item()
+        max_sim_en = np.max(sim_en).item()
+
         if max_sim_vi >= 0.9 or max_sim_en >= 0.9:
             vi_index = np.argmax(sim_vi)
             en_index = np.argmax(sim_en)
@@ -185,29 +168,30 @@ async def add_question(new_question: NewQuestion):
             #most_similar_en = questions[en_index]['question_en']
             raise HTTPException(
                 status_code=400,
-                #detail=f"Câu hỏi đã tồn tại với nội dung tương tự:\n- VI: {most_similar_vi}\n- EN: {most_similar_en}"
+                detail=f"Câu hỏi đã tồn tại:\n- VI: {most_similar_vi}\n- EN: {most_similar_en}"
             )
 
-        # Chưa trùng thì thêm vào DB
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO qa_pairs (website_id, question_vi, answer_vi, question_en, answer_en) VALUES (%s, %s, %s, %s, %s)",
-            (new_question.website_id, new_question.question_vi, new_question.answer_vi, new_question.question_en, new_question.answer_en)
-        )
+        cursor.execute("""
+            INSERT INTO qa_pairs (website_id, question_vi, answer_vi, question_en, answer_en, hidden)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            new_question.website_id,
+            new_question.question_vi,
+            new_question.answer_vi,
+            new_question.question_en,
+            new_question.answer_en,
+            0  # hidden mặc định là 0
+        ))
         conn.commit()
         question_id = cursor.lastrowid
         cursor.close()
         conn.close()
 
-        # Cập nhật lại questions & embeddings
-        questions = get_all_questions()
-        question_texts_vi = [q['question_vi'] for q in questions]
-        question_texts_en = [q['question_en'] for q in questions]
-        question_embeddings_vi = model.encode(question_texts_vi)
-        question_embeddings_en = model.encode(question_texts_en)
-
+        load_embeddings()
         return {"id": question_id, "message": "Question added successfully"}
+
     except HTTPException as he:
         raise he
     except Exception as e:
@@ -215,35 +199,20 @@ async def add_question(new_question: NewQuestion):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
 @app.put("/update-question/{id}")
 async def update_question(id: int, updated_question: UpdateQuestion):
-    global questions, question_embeddings_vi, question_embeddings_en
     try:
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE qa_pairs SET website_id = %s, question_vi = %s, answer_vi = %s, question_en = %s, answer_en = %s WHERE id = %s",
-            (updated_question.website_id, updated_question.question_vi, updated_question.answer_vi, updated_question.question_en, updated_question.answer_en, id)
-        )
+        cursor.execute("""
+            UPDATE qa_pairs SET website_id = %s, question_vi = %s, answer_vi = %s, question_en = %s, answer_en = %s WHERE id = %s
+        """, (updated_question.website_id, updated_question.question_vi, updated_question.answer_vi, updated_question.question_en, updated_question.answer_en, id))
         conn.commit()
         cursor.close()
         conn.close()
-        
-        # Cập nhật lại embeddings sau khi chỉnh sửa
-        #global questions, question_embeddings
-        index_map = {q["id"]: i for i, q in enumerate(questions)}
-        if id in index_map:
-            idx = index_map[id]
-            # Cập nhật questions
-            questions[idx]["question_vi"] = updated_question.question_vi
-            questions[idx]["answer_vi"] = updated_question.answer_vi
-            questions[idx]["question_en"] = updated_question.question_en
-            questions[idx]["answer_en"] = updated_question.answer_en
 
-            # Encode lại câu hỏi đã update
-            question_embeddings_vi[idx] = model.encode([updated_question.question_vi])[0]
-            question_embeddings_en[idx] = model.encode([updated_question.question_en])[0]
-        
+        load_embeddings()
         return {"message": "Question updated successfully"}
     except Exception as e:
         print("Error:", e)
@@ -251,7 +220,6 @@ async def update_question(id: int, updated_question: UpdateQuestion):
 
 @app.patch("/hide-question/{question_id}")
 async def hide_question(question_id: int):
-    global questions, question_embeddings_vi, question_embeddings_en
     try:
         conn = get_db()
         cursor = conn.cursor()
@@ -259,15 +227,8 @@ async def hide_question(question_id: int):
         conn.commit()
         cursor.close()
         conn.close()
-        
-        # Cập nhật lại embeddings sau khi ẩn/hiện
-        #global questions, question_embeddings
-        questions = get_all_questions()
-        question_texts_vi = [q['question_vi'] for q in questions]
-        question_texts_en = [q['question_en'] for q in questions]
-        question_embeddings_vi = model.encode(question_texts_vi)
-        question_embeddings_en = model.encode(question_texts_en)
-        
+
+        load_embeddings()
         return {"message": "Question visibility toggled"}
     except Exception as e:
         print("Error:", e)
@@ -278,12 +239,7 @@ async def fetch_all_qa_pairs():
     try:
         conn = get_db()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT q.id, d.id as department_id, d.name_vi as department, w.id as website_id, w.name_vi as website, q.question_vi, q.answer_vi, q.question_en, q.answer_en, q.hidden
-            FROM qa_pairs q
-            JOIN websites w ON q.website_id = w.id
-            JOIN departments d ON w.department_id = d.id
-        """)
+        cursor.execute("SELECT id, website_id, question_vi, answer_vi, question_en, answer_en, hidden FROM qa_pairs")
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
