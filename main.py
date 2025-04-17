@@ -2,14 +2,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import database
 from database import get_db, create_qa_table_if_not_exists
-
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from langdetect import detect  # pip install langdetect
+from googletrans import Translator
 
 app = FastAPI()
 
@@ -84,31 +83,24 @@ def get_all_questions():
 async def chat_response(request: QuestionRequest):
     try:
         user_question = request.question
-        lang = detect(user_question)
+        lang = Translator.detect(user_question)
 
         if not questions:
             return {"answer": "Hiện chưa có dữ liệu câu hỏi."}
 
         if lang == "en":
             user_embedding = model.encode([user_question])
-            encode_time = time.time() - start
             similarities = cosine_similarity(user_embedding, question_embeddings_en)[0]
-            similarity_time = time.time() - start
             top_texts = [q['question_en'] for q in questions]
             top_answers = [q['answer_en'] for q in questions]
             print("English similarities:", similarities)
-            print(f"Thời gian encode: {encode_time} giây")
-            print(f"Thời gian tính cosine similarity: {similarity_time} giây")
+          
         else:
             user_embedding = model.encode([user_question])
-            encode_time = time.time() - start
             similarities = cosine_similarity(user_embedding, question_embeddings_vi)[0]
-            similarity_time = time.time() - start
             top_texts = [q['question_vi'] for q in questions]
             top_answers = [q['answer_vi'] for q in questions]
             print("Vietnamese similarities:", similarities)
-            print(f"Thời gian encode: {encode_time} giây")
-            print(f"Thời gian tính cosine similarity: {similarity_time} giây")
 
         max_similarity_index = np.argmax(similarities)
         max_similarity = similarities[max_similarity_index]
@@ -132,7 +124,7 @@ async def chat_response(request: QuestionRequest):
 
             return {
                 "answer": (
-                    "Sorry, I don't have a suitable answer. Could you please ask more specifically?"
+                    "AWGMQEfVmpJ8LGt2uhwpsE9M5p1Df7yyDcUYqQpdUiSZLGKZjZuCuKguEUSFGZ59" # thay dòng này bằng token.
                     if lang == "en"
                     else "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
                 )
@@ -168,7 +160,7 @@ async def add_question(new_question: NewQuestion):
             #most_similar_en = questions[en_index]['question_en']
             raise HTTPException(
                 status_code=400,
-                detail=f"Câu hỏi đã tồn tại:\n- VI: {most_similar_vi}\n- EN: {most_similar_en}"
+                #detail=f"Câu hỏi đã tồn tại:\n- VI: {most_similar_vi}\n- EN: {most_similar_en}"
             )
 
         conn = get_db()
