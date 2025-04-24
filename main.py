@@ -124,9 +124,7 @@ async def chat_response(request: QuestionRequest):
             if lang == "en" or lang == "vi":
                 return {
                     "answer": (
-                        "AWGMQEfVmpJ8LGt2uhwpsE9M5p1Df7yyDcUYqQpdUiSZLGKZjZuCuKguEUSFGZ59" # thay dòng này bằng token.
-                    
-                    #else "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
+                        "AWGMQEfVmpJ8LGt2uhwpsE9M5p1Df7yyDcUYqQpdUiSZLGKZjZuCuKguEUSFGZ59"
                     )
                 }
     except Exception as e:
