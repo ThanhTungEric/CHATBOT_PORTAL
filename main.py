@@ -12,6 +12,8 @@ from googletrans import Translator
 
 app = FastAPI()
 
+translator = Translator()
+
 # Tạo bảng nếu chưa tồn tại
 create_qa_table_if_not_exists()
 
@@ -83,7 +85,7 @@ def get_all_questions():
 async def chat_response(request: QuestionRequest):
     try:
         user_question = request.question
-        lang = Translator.detect(user_question)
+        lang = translator.detect(user_question).lang
 
         if not questions:
             return {"answer": "Hiện chưa có dữ liệu câu hỏi."}
@@ -94,7 +96,6 @@ async def chat_response(request: QuestionRequest):
             top_texts = [q['question_en'] for q in questions]
             top_answers = [q['answer_en'] for q in questions]
             print("English similarities:", similarities)
-          
         else:
             user_embedding = model.encode([user_question])
             similarities = cosine_similarity(user_embedding, question_embeddings_vi)[0]
@@ -102,15 +103,22 @@ async def chat_response(request: QuestionRequest):
             top_answers = [q['answer_vi'] for q in questions]
             print("Vietnamese similarities:", similarities)
 
+        # Main logic
         max_similarity_index = np.argmax(similarities)
         max_similarity = similarities[max_similarity_index]
-        print(top_answers[max_similarity_index])
 
-        if max_similarity > 0.7:
+        # Senior's logic: confidence from top 3 scores
+        top_k = 3
+        top_indices = np.argsort(similarities)[-top_k:][::-1]
+        top_scores = [similarities[i] for i in top_indices]
+        combined_confidence = np.sqrt(sum([s ** 2 for s in top_scores]))
+
+        print(f"Max score: {max_similarity:.3f}, Combined top-{top_k} confidence: {combined_confidence:.3f}")
+
+        # Decision logic
+        if max_similarity > 0.7 or combined_confidence > 1.15:  # tune this threshold if needed
             return {"answer": top_answers[max_similarity_index]}
-            
         else:
-            top_indices = np.argsort(similarities)[-3:][::-1]
             suggestions = [top_texts[i] for i in top_indices if similarities[i] >= 0.5]
             if suggestions:
                 return {
@@ -121,17 +129,16 @@ async def chat_response(request: QuestionRequest):
                     ),
                     "suggestions": suggestions
                 }
-            if lang == "en" or lang == "vi":
-                return {
-                    "answer": (
-                        "AWGMQEfVmpJ8LGt2uhwpsE9M5p1Df7yyDcUYqQpdUiSZLGKZjZuCuKguEUSFGZ59" # thay dòng này bằng token.
-                    
-                    #else "Xin lỗi, tôi không có câu trả lời phù hợp. Bạn có thể hỏi chi tiết hơn không?"
-                    )
-                }
+
+            # Score too low — trigger frontend fallback flow
+            return {
+                "answer": "AWGMQEfVmpJ8LGt2uhwpsE9M5p1Df7yyDcUYqQpdUiSZLGKZjZuCuKguEUSFGZ59"
+            }
+
     except Exception as e:
         print("Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/add-question")
 async def add_question(new_question: NewQuestion):
