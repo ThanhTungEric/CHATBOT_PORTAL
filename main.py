@@ -10,9 +10,8 @@ from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import cosine_similarity
 from googletrans import Translator
 
-import database
 from database import get_db, create_qa_table_if_not_exists
-from DeepSeekV1 import DeepSeekHelper
+from Models.Gemini import GeminiHelper
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -31,14 +30,11 @@ app.add_middleware(
 )
 
 translator = Translator()
-DeepSeek = DeepSeekHelper()
+Gemini = GeminiHelper()
 
-# Ensure table exists
-create_qa_table_if_not_exists()
-
-# Load intent templates
+#Load intent templates
 try:
-    with open("qa_data_fewshot.json", encoding="utf-8") as f:
+    with open("Data/qa_data_fewshot.json", encoding="utf-8") as f:
         qa_data = json.load(f)
     intent_query_templates = qa_data.get("intent_query_templates", {})
 except (FileNotFoundError, json.JSONDecodeError) as e:
@@ -63,7 +59,6 @@ class UpdateQuestion(BaseModel):
     question_en: str
     answer_en: str
 
-# Load SBERT
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
 questions = []
@@ -100,33 +95,50 @@ async def chat_response(request: QuestionRequest):
     try:
         user_question = request.question
         lang = translator.detect(user_question).lang
-
+        
         if not questions:
-            answer = DeepSeek.call_model(user_question, lang=lang)
+            answer = Gemini.call_model(user_question, lang=lang)
             return {
                 "answer": answer or "Hiện chưa có dữ liệu câu hỏi.",
                 "is_fallback": True
             }
-
-        # Intent detection
+        
+        # Improved intent detection
         intents = []
-        if "moodle" in user_question.lower():
-            intents.append({"intent": "login", "entity": "MOODLE"})
-        if "sis" in user_question.lower():
-            intents.append({"intent": "login", "entity": "SIS"})
-
+        user_question_lower = user_question.lower()
+        if "moodle" in user_question_lower:
+            if any(k in user_question_lower for k in ["login", "đăng nhập"]):
+                intents.append({"intent": "login", "entity": "MOODLE"})
+            elif any(k in user_question_lower for k in ["password", "mật khẩu", "reset", "đặt lại"]):
+                intents.append({"intent": "reset_password", "entity": "MOODLE"})
+            elif any(k in user_question_lower for k in ["student", "sinh viên", "class", "lớp"]):
+                intents.append({"intent": "manage_students", "entity": "MOODLE"})
+            else:
+                intents.append({"intent": "default", "entity": "MOODLE"})
+        if "sis" in user_question_lower:
+            if any(k in user_question_lower for k in ["login", "đăng nhập"]):
+                intents.append({"intent": "login", "entity": "SIS"})
+            elif any(k in user_question_lower for k in ["password", "mật khẩu", "reset", "đặt lại"]):
+                intents.append({"intent": "reset_password", "entity": "SIS"})
+            elif any(k in user_question_lower for k in ["student", "sinh viên", "class", "lớp"]):
+                intents.append({"intent": "manage_students", "entity": "SIS"})
+            elif any(k in user_question_lower for k in ["find", "tìm kiếm", "tìm thấy", "found", "information", "thông tin"]):
+                intents.append({"intent": "find", "entity": "SIS"})
+            else:
+                intents.append({"intent": "default", "entity": "SIS"})
+        
         if intents:
             combined_answer = []
-            used_DeepSeek = False
-
+            used_Gemini = False
+        
             for intent_dict in intents:
                 intent = intent_dict["intent"]
                 entity = intent_dict["entity"]
-
+        
                 templates = intent_query_templates.get(lang, {})
                 template = templates.get(intent, templates.get("default", "{intent} {entity}"))
                 intent_question = template.format(intent=intent, entity=entity)
-
+        
                 user_embedding = model.encode([intent_question])
                 if lang == "en":
                     similarities = cosine_similarity(user_embedding, question_embeddings_en)[0]
@@ -134,31 +146,31 @@ async def chat_response(request: QuestionRequest):
                 else:
                     similarities = cosine_similarity(user_embedding, question_embeddings_vi)[0]
                     top_answers = [q['answer_vi'] for q in questions]
-
+        
                 max_index = np.argmax(similarities)
                 top_k = 3
                 top_indices = np.argsort(similarities)[-top_k:][::-1]
                 combined_confidence = np.sqrt(sum([s ** 2 for s in [similarities[i] for i in top_indices]]))
-
+        
                 if similarities[max_index] > 0.7 or combined_confidence > 1.15:
                     combined_answer.append(top_answers[max_index])
                 else:
-                    fallback = DeepSeek.call_model(intent_question, lang=lang)
+                    fallback = Gemini.call_model(user_question, lang=lang)  # Use original question for context
                     if fallback and not any(w in fallback.lower() for w in ["sorry", "xin lỗi", "unavailable", "không thể"]):
                         combined_answer.append(fallback)
-                        used_DeepSeek = True
+                        used_Gemini = True
                     else:
                         msg = (
                             f"Không tìm thấy thông tin cho {intent_question}" if lang == "vi"
                             else f"No information found for {intent_question}"
                         )
                         combined_answer.append(msg)
-
+        
             return {
                 "answer": "\n".join(combined_answer),
-                "is_fallback": used_DeepSeek
+                "is_fallback": used_Gemini
             }
-
+        
         else:
             user_embedding = model.encode([user_question])
             if lang == "en":
@@ -169,18 +181,18 @@ async def chat_response(request: QuestionRequest):
                 similarities = cosine_similarity(user_embedding, question_embeddings_vi)[0]
                 top_texts = [q['question_vi'] for q in questions]
                 top_answers = [q['answer_vi'] for q in questions]
-
+        
             max_index = np.argmax(similarities)
             top_k = 3
             top_indices = np.argsort(similarities)[-top_k:][::-1]
             combined_confidence = np.sqrt(sum([s ** 2 for s in [similarities[i] for i in top_indices]]))
-
+        
             if similarities[max_index] > 0.7 or combined_confidence > 1.15:
                 return {"answer": top_answers[max_index], "is_fallback": False}
-
+        
             suggestions = [top_texts[i] for i in top_indices if similarities[i] >= 0.5]
-            answer = DeepSeek.call_model(user_question, lang=lang)
-
+            answer = Gemini.call_model(user_question, lang=lang)
+        
             if answer and not any(k in answer.lower() for k in ["sorry", "xin lỗi", "unavailable", "không thể"]):
                 return {"answer": answer, "is_fallback": True}
             elif answer:
@@ -300,10 +312,6 @@ async def fetch_all_qa_pairs():
     except Exception as e:
         logger.error(f"Fetch error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    PORT = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="127.0.0.1", port=PORT)
 
 if __name__ == "__main__":
     PORT = int(os.getenv("PORT", 8000))

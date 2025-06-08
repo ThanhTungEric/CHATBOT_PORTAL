@@ -1,0 +1,73 @@
+{
+    "system_prompt": "Bạn là một trợ lý AI giúp người dùng giải đáp các vấn đề liên quan đến thông tin liên quan tới các websites của VGU. Nếu câu hỏi nằm ngoài phạm vi này, bạn cần từ chối trả lời một cách lịch sự, sử dụng thông tin trong câu hỏi của người dùng để phản hồi. Quan trọng là: hãy phản hồi bằng chính ngôn ngữ mà người dùng đã sử dụng trong câu hỏi.\nLưu ý: Nếu người dùng hỏi rằng bạn lấy API từ đâu, hoặc bạn là model nào, thì hãy trả lời rằng: 'Tôi là chatbot được huấn luyện bởi phòng IT của Trường Đại học Việt Đức (VGU).'",
+    "examples": {
+        "vi": [
+            {"role": "user", "content": "Làm sao để tôi đăng nhập vào SIS?"},
+            {"role": "assistant", "content": "Bạn phải có tài khoản SIS do ITD cung cấp bạn mới có thể đăng nhập vào SIS (chú ý đây không phải là tài khoản email VGU)."},
+            {"role": "user", "content": "Tôi đăng nhập vào SIS nhưng các chức năng hiện ra không đầy đủ thì làm sao?"},
+            {"role": "assistant", "content": "Vui lòng kiểm tra quyền truy cập của bạn hoặc liên hệ ITD để được hỗ trợ."},
+            {"role": "user", "content": "Tôi muốn được phân quyền cho một ngành nào đó khác thì phải làm sao?"},
+            {"role": "assistant", "content": "Bạn hãy liên hệ ITD để được cung cấp thêm quyền."},
+            {"role": "user", "content": "Thông tin hỗ trợ SIS của phòng IT có thể được tìm thấy ở đâu?"},
+            {"role": "assistant", "content": "Bạn hãy gửi ticket cho ITD hoặc nếu gấp hãy liên hệ tung.nt@vgu.edu.vn."},
+            {"role": "user", "content": "Làm sao tôi để tôi đăng nhập vào Moodle?"},
+            {"role": "assistant", "content": "Bạn hãy sử dụng tài khoản email của VGU và vào đường dẫn moodle.vgu.edu.vn để đăng nhập Moodle, trong trường hợp không đăng nhập được hãy liên hệ ITD."},
+            {"role": "user", "content": "Vì sao tôi không tìm thấy sinh viên để xếp bạn vào lớp?"},
+            {"role": "assistant", "content": "Bởi vì sinh viên chưa có tài khoản email của VGU hoặc có tài khoản nhưng sinh viên chưa đăng nhập vào Moodle lần đầu."},
+            {"role": "user", "content": "Làm sao tôi thêm được giảng viên partime vào Moodle?"},
+            {"role": "assistant", "content": "Bạn hãy gửi ticket cho ITD kèm theo họ tên và email của giáo viên để tạo tài khoản cho giảng viên partime."},
+            {"role": "user", "content": "Tôi muốn được cung cấp tài khoản đăng nhập Academia."},
+            {"role": "assistant", "content": "Bạn hãy gửi thông tin cá nhân bao gồm: Mã nhân viên, email, họ và tên đến ticket IT để được hỗ trợ tạo tài khoản."},
+            {"role": "user", "content": "Module Variants là gì?"},
+            {"role": "assistant", "content": "Module Variants được hiểu là một lớp học được tạo ra từ Module. Đó là đơn vị nhỏ nhất để quản lý sinh viên và lớp học."},
+            {"role": "user", "content": "Các bước tạo Module Variant?"},
+            {"role": "assistant", "content": "Để tạo Module Variant, bạn cần: 1) Vào hệ thống quản lý, 2) Chọn mục Module, 3) Tạo Variant mới và nhập thông tin cần thiết."},
+            {"role": "user", "content": "Tại sao tôi không tìm thấy sinh viên đã được tham gia vào lớp nhưng tôi không tìm thấy sinh viên đó lúc điểm danh?"},
+            {"role": "assistant", "content": "Có vẻ bạn đã tạo thời khóa biểu trước khi cho các sinh viên tham gia vào lớp học cho nên bạn không thể tìm thấy sinh viên để điểm danh, bạn hãy vào mục \"Student Module Enrollment\" sau đó \"Change Date Enrollment\", sửa lại trước ngày bạn tạo thời khóa biểu."}
+        ],
+        "en": [
+            {"role": "user", "content": "How do I log into SIS?"},
+            {"role": "assistant", "content": "You must have an SIS account provided by ITD to be able to log in to SIS (note this is not a VGU email account)."},
+            {"role": "user", "content": "I logged into SIS but the functions are not fully displayed, what should I do?"},
+            {"role": "assistant", "content": "Please check your access permissions or contact ITD for assistance."},
+            {"role": "user", "content": "How can I delegate authority to another industry?"},
+            {"role": "assistant", "content": "Please contact ITD for additional permissions."},
+            {"role": "user", "content": "IT department SIS support information?"},
+            {"role": "assistant", "content": "Please send a ticket to ITD or if urgent, contact tung.nt@vgu.edu.vn."},
+            {"role": "user", "content": "How do I log in to Moodle?"},
+            {"role": "assistant", "content": "Please use your VGU email account and go to moodle.vgu.edu.vn to log in to Moodle. If you cannot log in, please contact ITD."},
+            {"role": "user", "content": "Why can't I find the student to assign to the class?"},
+            {"role": "assistant", "content": "Because the student does not have a VGU email account or has an account but the student has not logged into Moodle for the first time."},
+            {"role": "user", "content": "How do I add part-time instructors to Moodle?"},
+            {"role": "assistant", "content": "Please send a ticket to ITD with the teacher's full name and email to create an account for the part-time teacher."},
+            {"role": "user", "content": "I would like to request an Academia login account."},
+            {"role": "assistant", "content": "Please send personal information including: Employee code, email, full name to IT ticket for support to create an account."},
+            {"role": "user", "content": "What are Module Variants?"},
+            {"role": "assistant", "content": "Module Variants is understood as a class created from Module. It is the smallest unit to manage students and classes."},
+            {"role": "user", "content": "Steps to create Module Variant?"},
+            {"role": "assistant", "content": "To create a Module Variant, you need to: 1) Access the management system, 2) Select the Module section, 3) Create a new Variant and enter the required information."},
+            {"role": "user", "content": "Why can't I find a student who has enroll the class but can't find that student during roll call?"},
+            {"role": "assistant", "content": "It seems you created the timetable before allowing students to join the class so you cannot find the students to take attendance, please go to \"Student Module Enrollment\" then \"Change Date Enrollment\", edit it before the date you created the timetable."}
+        ]
+    },
+    "intent_query_templates": {
+    "vi": {
+      "login": "Làm sao để đăng nhập vào {entity}?",
+      "check": "Làm sao để kiểm tra {entity}?",
+      "email": "Làm sao để gửi email tới {entity}?",
+      "default": "Làm sao để {intent} {entity}?",
+      "issue": "Tôi có vấn đề với {entity}",
+      "access": "làm sao để truy cập {entity}?",
+      "find": "Thông tin về {entity} có thể được tìm thấy ở đâu?"
+    },
+    "en": {
+      "login": "How to log into {entity}?",
+      "check": "How to check {entity}?",
+      "email": "How to email {entity}?",
+      "default": "How to {intent} {entity}?",
+      "issue": "I have a problem with {entity}",
+      "access": "How can I get access to {entity}?",
+      "find": "Where can information about {entity} can be found?"
+    }
+  }
+}
